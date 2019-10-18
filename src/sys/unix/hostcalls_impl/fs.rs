@@ -274,6 +274,7 @@ pub(crate) fn path_filestat_get(
     host_impl::filestat_from_nix(filestat)
 }
 
+#[cfg(not(target_os = "macos"))]
 pub(crate) fn path_filestat_set_times(
     resolved: PathGet,
     dirflags: host::__wasi_lookupflags_t,
@@ -335,6 +336,50 @@ pub(crate) fn path_filestat_set_times(
 
     let fd = resolved.dirfd().as_raw_fd().into();
     utimensat(fd, resolved.path(), &atim, &mtim, atflags).map_err(Into::into)
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn path_filestat_set_times(
+    resolved: PathGet,
+    dirflags: host::__wasi_lookupflags_t,
+    st_atim: host::__wasi_timestamp_t,
+    st_mtim: host::__wasi_timestamp_t,
+    fst_flags: host::__wasi_fstflags_t,
+) -> Result<()> {
+    let set_atim = fst_flags & host::__WASI_FILESTAT_SET_ATIM != 0;
+    let set_atim_now = fst_flags & host::__WASI_FILESTAT_SET_ATIM_NOW != 0;
+    let set_mtim = fst_flags & host::__WASI_FILESTAT_SET_MTIM != 0;
+    let set_mtim_now = fst_flags & host::__WASI_FILESTAT_SET_MTIM_NOW != 0;
+
+    if (set_atim && set_atim_now) || (set_mtim && set_mtim_now) {
+        return Err(Error::EINVAL);
+    }
+
+    let symlink = match dirflags {
+        host::__WASI_LOOKUP_SYMLINK_FOLLOW => true,
+        _ => false,
+    };
+
+    let atim = if set_atim {
+        let st_atim = st_atim.try_into()?;
+        Some(FileTime::from_nanoseconds(st_atim))
+    } else if set_atim_now {
+        unimplemented!()
+    } else {
+        None
+    };
+
+    let mtim = if set_mtim {
+        let st_mtim = st_mtim.try_into()?;
+        Some(FileTime::from_nanoseconds(st_mtim))
+    } else if set_mtim_now {
+        unimplemented!()
+    } else {
+        None
+    };
+
+    super::super::bsd::fs_helpers::utimensat(resolved.dirfd(), resolved.path(), atim, mtim, symlink)
+        .map_err(Into::into)
 }
 
 pub(crate) fn path_remove_directory(resolved: PathGet) -> Result<()> {
